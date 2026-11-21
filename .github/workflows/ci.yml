@@ -40,3 +40,27 @@ jobs:
       - name: Build dashboard
         working-directory: apps/dashboard
         run: npm run build
+  commit-lockfile:
+    # Temporary one-time job for this same-repository foundation branch only.
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/devpilot-mvp-foundation' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Generate lockfile
+        working-directory: apps/dashboard
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lockfile only
+        run: |
+          git add -- apps/dashboard/package-lock.json
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'build: commit dashboard dependency lockfile'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
