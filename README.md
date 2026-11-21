@@ -9,14 +9,14 @@ Supervised autonomous development agent — Milestone 1 foundation.
 - `services/agent` — deny-by-default Python policy
 - `supabase/migrations` — proposed private database schema, **not applied**
 - `docs` — architecture and security requirements
-- `.github/workflows/ci.yml` — test/build checks and lockfile artifact
+- `.github/workflows/ci.yml` — test/build checks with a committed dependency lockfile
 
 ## Local development
 Node 22+ and Python 3.11+ are recommended.
 
 ```sh
 cd apps/dashboard
-npm install
+npm ci
 npm run dev
 ```
 
@@ -29,7 +29,7 @@ python -m unittest discover -s tests -v
 - [x] Private repository and feature branch
 - [x] Dashboard, policy and database schema scaffold
 - [x] GitHub Actions CI configured
-- [ ] Commit reviewed `apps/dashboard/package-lock.json` (CI produces an artifact until committed)
+- [x] Commit `apps/dashboard/package-lock.json` and use `npm ci` in CI
 - [ ] CodeRabbit review completed and findings addressed
 - [ ] New CI checks pass on final commit
 
