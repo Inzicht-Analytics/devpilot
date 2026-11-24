@@ -1,4 +1,8 @@
 import unittest
+import secrets
+from devpilot.owner_auth import OwnerAuth
+from devpilot.execution_authorization import ExecutionAuthorization, AuthorizationDenied, GrantState
+from devpilot.proposal_validation import authorize_dry_run, consume_dry_run
 from dataclasses import replace
 from uuid import uuid4
 
@@ -38,3 +42,29 @@ class ProposalValidationTests(unittest.TestCase):
     def test_execution_still_disabled(self):
         with self.assertRaises(SandboxDenied):
             DisabledSandbox().execute(dry_run_request(self.proposal, self.sha))
+
+    def test_exact_proposal_authorization_and_replay(self):
+        key = secrets.token_bytes(32)
+        auth = OwnerAuth("owner", key)
+        token = auth.login(key)
+        ledger = ExecutionAuthorization(auth)
+        grant = authorize_dry_run(ledger, self.proposal, self.sha, token)
+        changed = replace(self.proposal, changes=(CodeChange(self.path, "modified"),))
+        with self.assertRaises(AuthorizationDenied):
+            consume_dry_run(ledger, grant.id, changed, self.sha, token)
+        with self.assertRaises(ProposalDenied):
+            consume_dry_run(ledger, grant.id, self.proposal, "b" * 40, token)
+        self.assertEqual(consume_dry_run(ledger, grant.id, self.proposal,
+                                        self.sha, token).state, GrantState.CONSUMED)
+        with self.assertRaises(AuthorizationDenied):
+            consume_dry_run(ledger, grant.id, self.proposal, self.sha, token)
+
+    def test_revoked_session_cannot_consume(self):
+        key = secrets.token_bytes(32)
+        auth = OwnerAuth("owner", key)
+        token = auth.login(key)
+        ledger = ExecutionAuthorization(auth)
+        grant = authorize_dry_run(ledger, self.proposal, self.sha, token)
+        auth.revoke(token)
+        with self.assertRaises(AuthorizationDenied):
+            consume_dry_run(ledger, grant.id, self.proposal, self.sha, token)
