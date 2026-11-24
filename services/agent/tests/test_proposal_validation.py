@@ -1,5 +1,8 @@
 import unittest
 import secrets
+import tempfile
+from pathlib import Path
+from devpilot.durable_code_approval import DurableCodeApproval, CodeApprovalDenied
 from devpilot.owner_auth import OwnerAuth
 from devpilot.execution_authorization import ExecutionAuthorization, AuthorizationDenied, GrantState
 from devpilot.proposal_validation import authorize_dry_run, consume_dry_run
@@ -47,8 +50,16 @@ class ProposalValidationTests(unittest.TestCase):
         key = secrets.token_bytes(32)
         auth = OwnerAuth("owner", key)
         token = auth.login(key)
-        ledger = ExecutionAuthorization(auth)
-        grant = authorize_dry_run(ledger, self.proposal, self.sha, token)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
+        ledger = ExecutionAuthorization(auth, store)
+        with self.assertRaises(AuthorizationDenied):
+            ledger.issue(dry_run_request(self.proposal, self.sha), token)
+        approval = store.approve(self.proposal, self.sha, token)
+        grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with self.assertRaises(CodeApprovalDenied):
+            authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         changed = replace(self.proposal, changes=(CodeChange(self.path, "modified"),))
         with self.assertRaises(AuthorizationDenied):
             consume_dry_run(ledger, grant.id, changed, self.sha, token)
@@ -63,8 +74,16 @@ class ProposalValidationTests(unittest.TestCase):
         key = secrets.token_bytes(32)
         auth = OwnerAuth("owner", key)
         token = auth.login(key)
-        ledger = ExecutionAuthorization(auth)
-        grant = authorize_dry_run(ledger, self.proposal, self.sha, token)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
+        ledger = ExecutionAuthorization(auth, store)
+        with self.assertRaises(AuthorizationDenied):
+            ledger.issue(dry_run_request(self.proposal, self.sha), token)
+        approval = store.approve(self.proposal, self.sha, token)
+        grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with self.assertRaises(CodeApprovalDenied):
+            authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         auth.revoke(token)
         with self.assertRaises(AuthorizationDenied):
             consume_dry_run(ledger, grant.id, self.proposal, self.sha, token)
