@@ -70,3 +70,16 @@ class DurableCodeApprovalTests(unittest.TestCase):
                 return False
         with ThreadPoolExecutor(max_workers=4) as pool:
             self.assertEqual(sum(pool.map(attempt, range(8))), 1)
+
+    def test_revoked_approval(self):
+        approval = self.approve()
+        self.store.revoke(approval, self.token)
+        with self.assertRaises(CodeApprovalDenied):
+            self.store.consume(approval, self.proposal, self.sha, self.token)
+
+    def test_expired_approval(self):
+        from unittest.mock import patch
+        approval = self.approve()
+        with patch.object(self.store, "_now", return_value="9999-01-01T00:00:00+00:00"):
+            with self.assertRaises(CodeApprovalDenied):
+                self.store.consume(approval, self.proposal, self.sha, self.token)

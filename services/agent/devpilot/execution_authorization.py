@@ -6,6 +6,7 @@ import time
 from uuid import UUID, uuid4
 
 from .owner_auth import OwnerAuth
+from .durable_code_approval import DurableCodeApproval
 from .sandbox import SandboxRequest, validate_request
 
 
@@ -36,8 +37,9 @@ class ExecutionAuthorization:
     not permission to bypass the disabled sandbox or existing policy.
     """
 
-    def __init__(self, auth: OwnerAuth):
+    def __init__(self, auth: OwnerAuth, approvals: DurableCodeApproval | None = None):
         self._auth = auth
+        self._approvals = approvals
         self._lock = Lock()
         self._grants: dict[UUID, Grant] = {}
         self._audit: list[Grant] = []
@@ -54,6 +56,19 @@ class ExecutionAuthorization:
         return grant
 
     def issue(self, request: SandboxRequest, token: str, ttl_seconds: int = 60) -> Grant:
+        if request.proposal_digest is not None:
+            raise AuthorizationDenied("durable proposal approval required")
+        return self._issue(request, token, ttl_seconds)
+
+    def issue_proposal(self, approval_id, proposal, trusted_commit, token, ttl_seconds=60):
+        if type(self._approvals) is not DurableCodeApproval or self._approvals.auth is not self._auth:
+            raise AuthorizationDenied("durable approval store required")
+        if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
+            raise AuthorizationDenied("invalid grant lifetime")
+        request = self._approvals.consume(approval_id, proposal, trusted_commit, token)
+        return self._issue(request, token, ttl_seconds)
+
+    def _issue(self, request, token, ttl_seconds):
         validate_request(request)
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
             raise AuthorizationDenied("invalid grant lifetime")

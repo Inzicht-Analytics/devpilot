@@ -33,9 +33,9 @@ def dry_run_request(proposal: CodeProposal, trusted_commit: str) -> SandboxReque
     return result
 
 
-def authorize_dry_run(ledger, proposal, trusted_commit, token, ttl_seconds=60):
+def authorize_dry_run(ledger, proposal, trusted_commit, token, ttl_seconds=60, *, approval_id=None):
     """Explicit owner authorization; separate from plan approval."""
-    return ledger.issue(dry_run_request(proposal, trusted_commit), token, ttl_seconds)
+    return ledger.issue_proposal(approval_id, proposal, trusted_commit, token, ttl_seconds)
 
 
 def consume_dry_run(ledger, grant_id, proposal, trusted_commit, token):
