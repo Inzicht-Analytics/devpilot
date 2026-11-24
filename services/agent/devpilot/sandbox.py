@@ -26,6 +26,7 @@ class SandboxRequest:
     memory_mib: int = 256
     cpu_count: int = 1
     output_bytes: int = 65536
+    proposal_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,10 @@ def validate_request(request: SandboxRequest) -> IsolationRequirements:
         raise SandboxDenied("full commit SHA required")
     if not isinstance(request.operation, SandboxOperation):
         raise SandboxDenied("operation outside allowlist")
+    if request.proposal_digest is not None and (
+            type(request.proposal_digest) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", request.proposal_digest)):
+        raise SandboxDenied("invalid proposal digest")
     for value, maximum in ((request.timeout_seconds, 120), (request.memory_mib, 512),
                            (request.cpu_count, 2), (request.output_bytes, 65536)):
         if type(value) is not int or not 1 <= value <= maximum:
