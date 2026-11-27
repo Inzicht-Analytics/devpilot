@@ -62,8 +62,9 @@ class ProposalValidationTests(unittest.TestCase):
         approval = store.approve(self.proposal, self.sha, token)
         with patch.object(verifier._reader, 'read_source', return_value='old'):
             grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
-        with self.assertRaises(CodeApprovalDenied):
-            authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with patch.object(verifier._reader, 'read_source', return_value='old'):
+            with self.assertRaises(CodeApprovalDenied):
+                authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         changed = replace(self.proposal, changes=(CodeChange(self.path, "modified"),))
         with self.assertRaises(AuthorizationDenied):
             consume_dry_run(ledger, grant.id, changed, self.sha, token)
@@ -112,13 +113,16 @@ class ProposalValidationTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
-        ledger = ExecutionAuthorization(auth, store)
+        verifier = SourceVerifier(GitHubReadAdapter('test'))
+        ledger = ExecutionAuthorization(auth, store, verifier)
         with self.assertRaises(AuthorizationDenied):
             ledger.issue(dry_run_request(self.proposal, self.sha), token)
         approval = store.approve(self.proposal, self.sha, token)
-        grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
-        with self.assertRaises(CodeApprovalDenied):
-            authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with patch.object(verifier._reader, 'read_source', return_value='old'):
+            grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with patch.object(verifier._reader, 'read_source', return_value='old'):
+            with self.assertRaises(CodeApprovalDenied):
+                authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         auth.revoke(token)
         with self.assertRaises(AuthorizationDenied):
             consume_dry_run(ledger, grant.id, self.proposal, self.sha, token)
