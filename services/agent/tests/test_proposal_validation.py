@@ -11,7 +11,9 @@ from uuid import uuid4
 
 from devpilot.code_generation import (CodeProposal, CodeChange, GenerationRequest,
                                       SourceFile, ProposalDenied)
-from devpilot.github_read import PILOT_REPOSITORY
+from devpilot.github_read import PILOT_REPOSITORY, GitHubReadAdapter
+from devpilot.source_verification import SourceVerifier
+from unittest.mock import patch
 from devpilot.proposal_validation import dry_run_request
 from devpilot.sandbox import DisabledSandbox, SandboxDenied
 
@@ -53,11 +55,13 @@ class ProposalValidationTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
-        ledger = ExecutionAuthorization(auth, store)
+        verifier = SourceVerifier(GitHubReadAdapter('test'))
+        ledger = ExecutionAuthorization(auth, store, verifier)
         with self.assertRaises(AuthorizationDenied):
             ledger.issue(dry_run_request(self.proposal, self.sha), token)
         approval = store.approve(self.proposal, self.sha, token)
-        grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        with patch.object(verifier._reader, 'read_source', return_value='old'):
+            grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         with self.assertRaises(CodeApprovalDenied):
             authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
         changed = replace(self.proposal, changes=(CodeChange(self.path, "modified"),))
@@ -69,6 +73,37 @@ class ProposalValidationTests(unittest.TestCase):
                                         self.sha, token).state, GrantState.CONSUMED)
         with self.assertRaises(AuthorizationDenied):
             consume_dry_run(ledger, grant.id, self.proposal, self.sha, token)
+
+    def test_source_mismatch_does_not_consume_durable_approval(self):
+        key = secrets.token_bytes(32)
+        auth = OwnerAuth("owner", key)
+        token = auth.login(key)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
+        verifier = SourceVerifier(GitHubReadAdapter("test"))
+        ledger = ExecutionAuthorization(auth, store, verifier)
+        approval = store.approve(self.proposal, self.sha, token)
+        with patch.object(verifier._reader, "read_source", return_value="forged"):
+            with self.assertRaises(AuthorizationDenied):
+                authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        self.assertIsNone(store.history(token)[0][-1], "approval should remain unused")
+        with patch.object(verifier._reader, "read_source", return_value="old"):
+            grant = authorize_dry_run(ledger, self.proposal, self.sha, token, approval_id=approval)
+        self.assertEqual(grant.request.commit_sha, self.sha)
+
+    def test_missing_verifier_fails_closed_before_approval_consumption(self):
+        key = secrets.token_bytes(32)
+        auth = OwnerAuth("owner", key)
+        token = auth.login(key)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = DurableCodeApproval(Path(tmp.name) / "approval.db", auth, "owner")
+        approval = store.approve(self.proposal, self.sha, token)
+        with self.assertRaises(AuthorizationDenied):
+            authorize_dry_run(ExecutionAuthorization(auth, store), self.proposal,
+                              self.sha, token, approval_id=approval)
+        self.assertIsNone(store.history(token)[0][-1])
 
     def test_revoked_session_cannot_consume(self):
         key = secrets.token_bytes(32)
