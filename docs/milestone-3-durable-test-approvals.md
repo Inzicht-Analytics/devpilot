@@ -1,21 +1,25 @@
-# M3.14 — Durable test-request owner approvals (foundation)
+# M3.15 — Enforce durable owner approvals for test grants
 
-The host-only `DurableTestApproval` SQLite ledger stores a single-use,
-expiring, revocable owner approval for the **exact bounded** `RUN_TESTS`
-request. It binds the task UUID, repository, commit SHA, operation and all
-resource limits using a deterministic SHA-256 digest.
+The `ExecutionAuthorization.issue` path now requires an existing
+`DurableTestApproval` instance tied to the same owner authentication
+context, and an approval ID for the **exact** bounded `RUN_TESTS`
+request. Missing stores, missing approvals, revoked or expired approvals,
+modified request fields and replay fail closed.
 
-The ledger requires a valid local owner session for approval, consumption
-and revocation. Consumption uses a transactional conditional update so
-concurrent attempts cannot reuse an approval. Invalid request scope,
-expired/revoked approvals, altered parameters and replay are rejected.
+The order of checks is important:
+1. Validate the bounded request and restrict the generic path to `RUN_TESTS`.
+2. Verify the trusted task/plan identity and `AWAITING_APPROVAL` state.
+3. Validate the requested grant lifetime and authenticated owner session.
+4. Atomically consume the durable, single-use exact-request approval.
+5. Issue a short-lived process-local grant.
 
-This is a preparatory capability only. **The execution authorization path
-does not yet require or consume this new ledger**; integration and
-grant-failure semantics are the next phase. The current `DisabledSandbox`
-remains disabled. No filesystem writes, code execution, deployment,
-GitHub mutations or production migrations are enabled by this module.
+Failures before durable consumption do not burn an approval; a later failure
+after consumption may burn it safely without issuing a grant. Grant usage
+still requires exact-request matching and one-time consumption.
 
-Tests cover persistence across store instances, single-use replay,
-concurrency, resource binding, owner-session revocation, expiry,
-approval revocation and fail-closed request validation.
+This supersedes the foundation-only stage: the durable test approval is now
+mandatory at grant issuance, but it remains a reference implementation.
+Trusted host provenance for task and plan objects, independent verification
+of test sources, and runtime isolation require further review before
+activation. `DisabledSandbox` remains disabled. No repository write,
+deployment or production database migration is enabled.
