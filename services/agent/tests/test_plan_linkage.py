@@ -1,12 +1,14 @@
 import unittest
+from datetime import timedelta
 from dataclasses import replace
 from uuid import uuid4
 
 from devpilot.code_generation import CodeProposal, CodeChange, GenerationRequest, SourceFile
 from devpilot.github_read import PILOT_REPOSITORY
-from devpilot.orchestrator import create_task, TaskStatus, transition
+from devpilot.orchestrator import create_task, TaskStatus, transition, AuditEvent
 from devpilot.planning import ProposedPlan, RepositorySnapshot, prepare_plan
-from devpilot.plan_linkage import PlanLinkageDenied, validate_plan_linkage
+from devpilot.plan_linkage import PlanLinkageDenied, validate_plan_linkage, validate_test_plan_linkage
+from devpilot.sandbox import SandboxRequest, SandboxOperation
 
 
 class PlanLinkageTests(unittest.TestCase):
@@ -65,3 +67,29 @@ class PlanLinkageTests(unittest.TestCase):
         ):
             with self.assertRaises(PlanLinkageDenied):
                 validate_plan_linkage(task, plan, proposal)
+
+    def test_complete_audit_chain_is_checked_for_proposals_and_tests(self):
+        events = self.task.events
+        forged = [
+            replace(self.task, events=(events[-1],)),
+            replace(self.task, events=(replace(events[0], task_id=uuid4()),) + events[1:]),
+            replace(self.task, events=(replace(events[1], from_status=TaskStatus.BLOCKED),) + events[2:]),
+            replace(self.task, events=(events[0], replace(events[1], to_status=TaskStatus.AWAITING_APPROVAL), events[2])),
+            replace(self.task, events=events[:-1] + (replace(events[-1], occurred_at=events[0].occurred_at - timedelta(seconds=1)),)),
+            replace(self.task, events=events[:-1] + (replace(events[-1], reason="  "),)),
+            replace(self.task, events=events[:-1] + (replace(events[-1], occurred_at=events[-1].occurred_at.replace(tzinfo=None)),)),
+            replace(self.task, events=events[:-1] + (replace(events[-1], task_id=uuid4()),)),
+        ]
+        test_request = SandboxRequest(self.task.id, PILOT_REPOSITORY, "a" * 40,
+                                      SandboxOperation.RUN_TESTS)
+        for task in forged:
+            with self.subTest(events=task.events):
+                with self.assertRaises(PlanLinkageDenied):
+                    validate_plan_linkage(task, self.plan, self.proposal)
+                with self.assertRaises(PlanLinkageDenied):
+                    validate_test_plan_linkage(task, self.plan, test_request)
+
+    def test_valid_replanning_history_is_accepted(self):
+        resumed = transition(self.task, TaskStatus.PLANNING, "scope changed")
+        renewed = transition(resumed, TaskStatus.AWAITING_APPROVAL, "new plan requested")
+        validate_plan_linkage(renewed, self.plan, self.proposal)
