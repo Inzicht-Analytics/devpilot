@@ -9,7 +9,7 @@ from devpilot.github_read import GitHubReadAdapter, GitHubReadError
 
 
 def oid(kind, raw):
-    return hashlib.sha1(kind.encode() + b" " + str(len(raw)).encode() + b"\\x00" + raw).hexdigest()
+    return hashlib.sha1(kind.encode() + b" " + str(len(raw)).encode() + b"\x00" + raw).hexdigest()
 
 
 class Response:
@@ -29,7 +29,7 @@ class Response:
 class TestPinnedSourceTraversal(unittest.TestCase):
     def setUp(self):
         self.path = "src/pages/Home.tsx"
-        self.data = b"export const title = 'ok';\\n"
+        self.data = b"export const title = 'ok';\n"
         self.blob = oid("blob", self.data)
         self.page_tree = "1" * 40
         self.src_tree = "2" * 40
@@ -104,12 +104,12 @@ class TestPinnedSourceTraversal(unittest.TestCase):
 
     def test_rejects_tampered_blob_content(self):
         self.routes["/git/blobs/" + self.blob]["content"] = base64.b64encode(
-            b"export const title = 'no';\\n").decode()
+            b"export const title = 'no';\n").decode()
         with self.assertRaises(GitHubReadError):
             self.reader().read_source(self.commit, self.path)
 
     def test_rejects_invalid_utf8_and_oversized_source(self):
-        for payload in (b"\\xff", b"a" * 16385):
+        for payload in (b"\xff", b"a" * 16385):
             with self.subTest(length=len(payload)):
                 new_hash = oid("blob", payload)
                 page = self.routes["/git/trees/" + self.page_tree]["tree"][0]
