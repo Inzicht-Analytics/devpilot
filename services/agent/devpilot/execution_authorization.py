@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from .owner_auth import OwnerAuth
 from .durable_code_approval import DurableCodeApproval
 from .sandbox import SandboxRequest, validate_request
+from .source_verification import SourceVerifier, SourceVerificationDenied
 
 
 class AuthorizationDenied(ValueError):
@@ -37,9 +38,11 @@ class ExecutionAuthorization:
     not permission to bypass the disabled sandbox or existing policy.
     """
 
-    def __init__(self, auth: OwnerAuth, approvals: DurableCodeApproval | None = None):
+    def __init__(self, auth: OwnerAuth, approvals: DurableCodeApproval | None = None,
+                 verifier: SourceVerifier | None = None):
         self._auth = auth
         self._approvals = approvals
+        self._verifier = verifier
         self._lock = Lock()
         self._grants: dict[UUID, Grant] = {}
         self._audit: list[Grant] = []
@@ -65,6 +68,14 @@ class ExecutionAuthorization:
             raise AuthorizationDenied("durable approval store required")
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
             raise AuthorizationDenied("invalid grant lifetime")
+        # Fail closed: independent pinned-source verification must precede
+        # consuming a durable single-use approval.
+        if type(self._verifier) is not SourceVerifier:
+            raise AuthorizationDenied('independent source verifier required')
+        try:
+            self._verifier.verify(proposal, trusted_commit)
+        except SourceVerificationDenied:
+            raise AuthorizationDenied('source verification failed') from None
         request = self._approvals.consume(approval_id, proposal, trusted_commit, token)
         return self._issue(request, token, ttl_seconds)
 
