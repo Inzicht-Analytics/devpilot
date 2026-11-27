@@ -1,5 +1,7 @@
 import secrets
+import tempfile
 import unittest
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from unittest.mock import patch
@@ -9,6 +11,7 @@ from devpilot.owner_auth import OwnerAuth
 from devpilot.github_read import PILOT_REPOSITORY
 from devpilot.sandbox import SandboxRequest, SandboxOperation, DisabledSandbox, SandboxDenied
 from devpilot.execution_authorization import ExecutionAuthorization, AuthorizationDenied, GrantState
+from devpilot.durable_test_approval import DurableTestApproval
 from devpilot.orchestrator import create_task, TaskStatus, transition
 from devpilot.planning import RepositorySnapshot, prepare_plan
 
@@ -18,15 +21,22 @@ class AuthorizationTests(unittest.TestCase):
         key = secrets.token_bytes(32)
         self.auth = OwnerAuth("owner", key)
         self.token = self.auth.login(key)
-        self.ledger = ExecutionAuthorization(self.auth)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.db_path = Path(temp.name) / "tests.sqlite"
+        self.store = DurableTestApproval(self.db_path, self.auth, "owner")
+        self.ledger = ExecutionAuthorization(self.auth, test_approvals=self.store)
         self.task = create_task(PILOT_REPOSITORY, "Review isolated test request")
         self.task, self.plan = prepare_plan(self.task, RepositorySnapshot(PILOT_REPOSITORY, (), ()))
         self.request = SandboxRequest(self.task.id, PILOT_REPOSITORY, "a" * 40,
                                       SandboxOperation.RUN_TESTS)
 
-    def issue_test(self, ledger=None, token=None, ttl_seconds=60):
+    def issue_test(self, ledger=None, token=None, ttl_seconds=60, approval_id=None):
+        if approval_id is None:
+            approval_id = self.store.approve(self.request, self.token)
         return (ledger or self.ledger).issue(self.request, token or self.token, ttl_seconds,
-                                           task=self.task, plan=self.plan)
+                                           task=self.task, plan=self.plan,
+                                           approval_id=approval_id)
 
     def test_single_use(self):
         grant = self.issue_test()
@@ -73,10 +83,56 @@ class AuthorizationTests(unittest.TestCase):
         self.issue_test()
 
     def test_generic_grant_requires_authenticated_owner(self):
+        approval = self.store.approve(self.request, self.token)
         self.auth.revoke(self.token)
         with self.assertRaises(AuthorizationDenied):
-            self.issue_test()
+            self.issue_test(approval_id=approval)
         self.assertEqual(self.ledger._grants, {})
+
+    def test_test_grant_requires_durable_approval(self):
+        with self.assertRaises(AuthorizationDenied):
+            self.ledger.issue(self.request, self.token, task=self.task, plan=self.plan)
+        missing_store = ExecutionAuthorization(self.auth)
+        approval = self.store.approve(self.request, self.token)
+        with self.assertRaises(AuthorizationDenied):
+            missing_store.issue(self.request, self.token, task=self.task, plan=self.plan,
+                                approval_id=approval)
+        self.assertIsNone(self.store.history(self.token)[0][6])
+        grant = self.issue_test(approval_id=approval)
+        self.assertEqual(grant.request, self.request)
+        with self.assertRaises(AuthorizationDenied):
+            self.issue_test(approval_id=approval)
+
+    def test_modified_request_does_not_spend_approval(self):
+        approval = self.store.approve(self.request, self.token)
+        for change in ({"commit_sha": "b" * 40}, {"memory_mib": 128},
+                       {"timeout_seconds": 30}, {"cpu_count": 2},
+                       {"output_bytes": 1024}):
+            with self.subTest(change=change):
+                modified = replace(self.request, **change)
+                with self.assertRaises(AuthorizationDenied):
+                    self.ledger.issue(modified, self.token, task=self.task, plan=self.plan,
+                                      approval_id=approval)
+                self.assertIsNone(self.store.history(self.token)[0][6])
+        self.issue_test(approval_id=approval)
+
+    def test_rejected_plan_does_not_spend_test_approval(self):
+        approval = self.store.approve(self.request, self.token)
+        with self.assertRaises(AuthorizationDenied):
+            self.ledger.issue(self.request, self.token, task=self.task,
+                              plan=replace(self.plan, title="forged"), approval_id=approval)
+        self.assertIsNone(self.store.history(self.token)[0][6])
+        self.issue_test(approval_id=approval)
+
+    def test_reused_or_revoked_approval_denied(self):
+        approval = self.store.approve(self.request, self.token)
+        self.issue_test(approval_id=approval)
+        with self.assertRaises(AuthorizationDenied):
+            self.issue_test(approval_id=approval)
+        revoked = self.store.approve(self.request, self.token)
+        self.store.revoke(revoked, self.token)
+        with self.assertRaises(AuthorizationDenied):
+            self.issue_test(approval_id=revoked)
 
     def test_binding(self):
         grant = self.issue_test()
@@ -94,8 +150,10 @@ class AuthorizationTests(unittest.TestCase):
             key = secrets.token_bytes(32)
             auth = OwnerAuth("owner", key)
             token = auth.login(key)
-            ledger = ExecutionAuthorization(auth)
-            grant = self.issue_test(ledger, token, 10)
+            store = DurableTestApproval(self.db_path, auth, "owner")
+            ledger = ExecutionAuthorization(auth, test_approvals=store)
+            approval = store.approve(self.request, token)
+            grant = self.issue_test(ledger, token, 10, approval_id=approval)
         with patch("devpilot.execution_authorization.time.monotonic", return_value=110):
             with self.assertRaises(AuthorizationDenied):
                 ledger.consume(grant.id, self.request, token)
@@ -109,11 +167,12 @@ class AuthorizationTests(unittest.TestCase):
 
     def test_authentication(self):
         grant = self.issue_test()
+        additional = self.store.approve(self.request, self.token)
         self.auth.revoke(self.token)
         with self.assertRaises(AuthorizationDenied):
             self.ledger.consume(grant.id, self.request, self.token)
         with self.assertRaises(AuthorizationDenied):
-            self.issue_test()
+            self.issue_test(approval_id=additional)
 
     def test_concurrent_consumption(self):
         grant = self.issue_test()
@@ -136,6 +195,9 @@ class AuthorizationTests(unittest.TestCase):
         grant = self.issue_test()
         with self.assertRaises(AuthorizationDenied):
             ExecutionAuthorization(self.auth).consume(grant.id, self.request, self.token)
+        approval = self.store.approve(self.request, self.token)
         for ttl in (0, 301, True):
             with self.assertRaises(AuthorizationDenied):
-                self.issue_test(ttl_seconds=ttl)
+                self.issue_test(ttl_seconds=ttl, approval_id=approval)
+        # Validation failures do not burn the owner approval.
+        self.issue_test(approval_id=approval)
