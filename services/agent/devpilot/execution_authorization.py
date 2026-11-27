@@ -9,6 +9,7 @@ from .owner_auth import OwnerAuth
 from .durable_code_approval import DurableCodeApproval
 from .sandbox import SandboxRequest, validate_request
 from .source_verification import SourceVerifier, SourceVerificationDenied
+from .plan_linkage import validate_plan_linkage, PlanLinkageDenied
 
 
 class AuthorizationDenied(ValueError):
@@ -63,11 +64,16 @@ class ExecutionAuthorization:
             raise AuthorizationDenied("durable proposal approval required")
         return self._issue(request, token, ttl_seconds)
 
-    def issue_proposal(self, approval_id, proposal, trusted_commit, token, ttl_seconds=60):
+    def issue_proposal(self, approval_id, proposal, trusted_commit, token, ttl_seconds=60, *, task=None, plan=None):
         if type(self._approvals) is not DurableCodeApproval or self._approvals.auth is not self._auth:
             raise AuthorizationDenied("durable approval store required")
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
             raise AuthorizationDenied("invalid grant lifetime")
+        # Trusted task/plan identity must be validated before source reads or approval consumption.
+        try:
+            validate_plan_linkage(task, plan, proposal)
+        except PlanLinkageDenied:
+            raise AuthorizationDenied('trusted plan linkage required') from None
         # Fail closed: independent pinned-source verification must precede
         # consuming a durable single-use approval.
         if type(self._verifier) is not SourceVerifier:
