@@ -23,3 +23,17 @@ execution, repository writes by the agent, deployment or migrations.
 ## Additional grant-path restriction
 
 The generic `ExecutionAuthorization.issue` path permits `RUN_TESTS` requests only and never accepts a proposal digest. A `VALIDATE_PATCH` grant must instead use the trusted plan-linked, source-verified, durable-approval `issue_proposal` path. This blocks digest-free patch validation from bypassing proposal review. Both paths still use a disabled sandbox and cannot execute processes.
+
+
+## Test grant linkage hardening
+
+The generic `RUN_TESTS` grant now also requires trusted host-supplied task and
+plan context at the `AWAITING_APPROVAL` lifecycle state. Task UUID, repository
+and title must match the pending plan, and the request's task and repository
+must match that planning context. Missing, stale, forged or mismatched context
+is rejected before any grant is issued.
+
+This check is not proof that the plan contents were explicitly approved, nor
+a substitute for an isolated execution backend. The current `DisabledSandbox`
+continues to reject all execution attempts. A future backend must implement
+durable plan approval and verified, isolated execution before enabling tests.
