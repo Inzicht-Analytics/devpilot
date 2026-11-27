@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from .owner_auth import OwnerAuth
 from .durable_code_approval import DurableCodeApproval
+from .durable_test_approval import DurableTestApproval, TestApprovalDenied
 from .sandbox import SandboxRequest, SandboxOperation, validate_request
 from .source_verification import SourceVerifier, SourceVerificationDenied
 from .plan_linkage import validate_plan_linkage, validate_test_plan_linkage, PlanLinkageDenied
@@ -40,10 +41,12 @@ class ExecutionAuthorization:
     """
 
     def __init__(self, auth: OwnerAuth, approvals: DurableCodeApproval | None = None,
-                 verifier: SourceVerifier | None = None):
+                 verifier: SourceVerifier | None = None,
+                 test_approvals: DurableTestApproval | None = None):
         self._auth = auth
         self._approvals = approvals
         self._verifier = verifier
+        self._test_approvals = test_approvals
         self._lock = Lock()
         self._grants: dict[UUID, Grant] = {}
         self._audit: list[Grant] = []
@@ -59,16 +62,29 @@ class ExecutionAuthorization:
         self._audit.append(grant)
         return grant
 
-    def issue(self, request: SandboxRequest, token: str, ttl_seconds: int = 60, *, task=None, plan=None) -> Grant:
-        # A generic grant can authorize tests only. Patch validation must be
-        # bound to an independently verified proposal and durable approval.
+    def issue(self, request: SandboxRequest, token: str, ttl_seconds: int = 60,
+              *, task=None, plan=None, approval_id=None) -> Grant:
+        # Test grants require a durable, exact, single-use owner approval.
+        # Patch validation uses the separate proposal authorization path.
         validate_request(request)
         if request.operation is not SandboxOperation.RUN_TESTS or request.proposal_digest is not None:
             raise AuthorizationDenied("patch validation requires approved proposal")
+        if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 300:
+            raise AuthorizationDenied("invalid grant lifetime")
         try:
             validate_test_plan_linkage(task, plan, request)
         except PlanLinkageDenied:
             raise AuthorizationDenied("trusted test plan linkage required") from None
+        if (type(self._test_approvals) is not DurableTestApproval
+                or self._test_approvals.auth is not self._auth):
+            raise AuthorizationDenied("durable test approval store required")
+        # Authentication and parameter validation must happen before spending
+        # the durable approval. Failure after consumption burns it safely.
+        self._owner(token)
+        try:
+            self._test_approvals.consume(approval_id, request, token)
+        except TestApprovalDenied:
+            raise AuthorizationDenied("durable test approval unavailable") from None
         return self._issue(request, token, ttl_seconds)
 
     def issue_proposal(self, approval_id, proposal, trusted_commit, token, ttl_seconds=60, *, task=None, plan=None):
