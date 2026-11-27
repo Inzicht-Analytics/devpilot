@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from .owner_auth import OwnerAuth
 from .durable_code_approval import DurableCodeApproval
-from .sandbox import SandboxRequest, validate_request
+from .sandbox import SandboxRequest, SandboxOperation, validate_request
 from .source_verification import SourceVerifier, SourceVerificationDenied
 from .plan_linkage import validate_plan_linkage, PlanLinkageDenied
 
@@ -60,8 +60,11 @@ class ExecutionAuthorization:
         return grant
 
     def issue(self, request: SandboxRequest, token: str, ttl_seconds: int = 60) -> Grant:
-        if request.proposal_digest is not None:
-            raise AuthorizationDenied("durable proposal approval required")
+        # A generic grant can authorize tests only. Patch validation must be
+        # bound to an independently verified proposal and durable approval.
+        validate_request(request)
+        if request.operation is not SandboxOperation.RUN_TESTS or request.proposal_digest is not None:
+            raise AuthorizationDenied("patch validation requires approved proposal")
         return self._issue(request, token, ttl_seconds)
 
     def issue_proposal(self, approval_id, proposal, trusted_commit, token, ttl_seconds=60, *, task=None, plan=None):

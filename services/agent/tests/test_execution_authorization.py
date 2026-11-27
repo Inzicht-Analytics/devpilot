@@ -28,6 +28,25 @@ class AuthorizationTests(unittest.TestCase):
             self.ledger.consume(grant.id, self.request, self.token)
         self.assertEqual(len(self.ledger.history(self.token)), 2)
 
+    def test_generic_grant_rejects_patch_validation_without_approval(self):
+        # A missing proposal digest must not bypass the durable approval path.
+        unbound_patch = replace(self.request, operation=SandboxOperation.VALIDATE_PATCH)
+        with self.assertRaises(AuthorizationDenied):
+            self.ledger.issue(unbound_patch, self.token)
+        bound_patch = replace(unbound_patch, proposal_digest="a" * 64)
+        with self.assertRaises(AuthorizationDenied):
+            self.ledger.issue(bound_patch, self.token)
+        self.assertEqual(self.ledger.history(self.token), ())
+
+    def test_generic_test_execution_grant_still_requires_owner_and_is_single_use(self):
+        grant = self.ledger.issue(self.request, self.token)
+        self.assertEqual(self.ledger.consume(grant.id, self.request, self.token).state,
+                         GrantState.CONSUMED)
+        with self.assertRaises(AuthorizationDenied):
+            self.ledger.consume(grant.id, self.request, self.token)
+        with self.assertRaises(SandboxDenied):
+            DisabledSandbox().execute(self.request)
+
     def test_binding(self):
         grant = self.ledger.issue(self.request, self.token)
         for changes in ({"commit_sha": "b" * 40}, {"task_id": uuid4()},
