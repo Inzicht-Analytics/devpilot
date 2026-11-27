@@ -19,3 +19,7 @@ verification but does not cancel in-flight operations.
 
 Existing READ/PLAN policy and DisabledSandbox remain unchanged. No code
 execution, repository writes by the agent, deployment or migrations.
+
+## Additional grant-path restriction
+
+The generic `ExecutionAuthorization.issue` path permits `RUN_TESTS` requests only and never accepts a proposal digest. A `VALIDATE_PATCH` grant must instead use the trusted plan-linked, source-verified, durable-approval `issue_proposal` path. This blocks digest-free patch validation from bypassing proposal review. Both paths still use a disabled sandbox and cannot execute processes.
