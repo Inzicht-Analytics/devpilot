@@ -1,20 +1,23 @@
-# M3.10 — Supervised plan linkage (offline validation)
+# M3.11 — Enforced supervised plan linkage at authorization
 
-This phase introduces `validate_plan_linkage`, an explicit, fail-closed
-check that a code proposal refers to the same trusted task and reviewable
-plan that entered the `awaiting_approval` lifecycle state.
+The proposal authorization boundary now calls `validate_plan_linkage`
+with trusted-host task and plan values **before** independent pinned-source
+verification and before consuming a durable single-use approval.
 
-It checks:
-- Exact task UUID and repository match the proposal request.
-- The task remains `awaiting_approval`, with a consistent latest audit event.
-- The trusted plan references the same task ID, repository, and title.
-- The plan retains `requires_approval=True`; no implied consent.
+Missing, stale, mismatched or non-awaiting-approval planning context denies
+grant issuance and leaves the durable approval unconsumed.
 
-Inputs must be supplied from trusted orchestration and planning storage;
-a model-provided plan or task snapshot is not proof of owner approval.
+This extends the offline validation introduced in M3.10; callers of
+`authorize_dry_run` must supply `task` and `plan` from the trusted
+orchestrator, not from model output. Validation of identity and workflow
+state does **not** demonstrate that an owner has approved the plan; the
+existing durable owner-approval check remains mandatory.
 
-**Scope limitation:** This is an offline preparatory guard, not yet wired
-into `ExecutionAuthorization.issue_proposal`. A later integration must
-require host-bound task and plan evidence at the authorization boundary,
-with approval/store and replay tests. No sandbox execution, repository
-write, deployment, or database migration is enabled.
+## Tests
+- Matching task, plan and proposal can proceed through existing source
+  verification and single-use approval checks.
+- Missing or forged plan, or a task returned to planning, fails closed
+  without spending an approval.
+- Source verification, one-use grants and DisabledSandbox remain intact.
+
+No live sandbox, GitHub write path, database migration or deployment is enabled.
